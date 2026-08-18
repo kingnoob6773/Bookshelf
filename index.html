@@ -77,8 +77,9 @@ h1{font-family:Georgia,serif;font-weight:500;font-size:31px;margin:4px 0 0}
  <div class="sheet" id="sheet"></div>
 </div>
 
+<script src="https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
 <script>
-const books = [
+const initialBooks = [
   {t:"La diva Julia",a:"W. Somerset Maugham",cat:"Personale",fmt:"Cartaceo",s:"Narrativa",ss:"Letteratura inglese",img:"https://covers.openlibrary.org/b/isbn/9788845919978-M.jpg",n:8,isbn:"9788845919978",pub:"Adelphi",year:"2005",pages:"275"},
   {t:"Dune",a:"Frank Herbert",cat:"Personale",fmt:"Cartaceo",s:"Fantascienza",ss:"Space opera",img:"https://covers.openlibrary.org/b/isbn/9788834738248-M.jpg",n:6},
   {t:"1984",a:"George Orwell",cat:"Personale",fmt:"Ebook",s:"Narrativa",ss:"Distopico",img:"https://covers.openlibrary.org/b/isbn/9780451524935-M.jpg",n:5},
@@ -88,138 +89,120 @@ const books = [
   {t:"Codice civile",a:"—",cat:"Studio / Lavoro",fmt:"Cartaceo",s:"Diritto",ss:"Civile",img:"https://covers.openlibrary.org/b/isbn/9788813376768-M.jpg",n:1},
   {t:"Sapiens",a:"Yuval Noah Harari",cat:"Personale",fmt:"Ebook",s:"Storia",ss:"Storia dell'umanità",img:"https://covers.openlibrary.org/b/isbn/9780062316097-M.jpg",n:0}
 ];
+let books = JSON.parse(localStorage.getItem('bookshelf_books') || 'null') || initialBooks;
+let filter="all", sort="recent", scannerControls=null;
 
-let filter="all", sort="recent";
-
-function setFilter(x){
-  filter=x;
-  document.querySelectorAll(".chip").forEach(b=>b.classList.toggle("active",b.dataset.filter===x));
-  render();
-}
-
-function cycleSort(){
-  sort = sort==="recent" ? "title" : sort==="title" ? "author" : "recent";
-  document.querySelector(".sort").textContent =
-    {recent:"Ultimi aggiunti ▾",title:"Titolo A → Z ▾",author:"Autore A → Z ▾"}[sort];
-  render();
-}
-
+function saveBooks(){ localStorage.setItem('bookshelf_books', JSON.stringify(books)); }
+function setFilter(x){filter=x;document.querySelectorAll('.chip').forEach(b=>b.classList.toggle('active',b.dataset.filter===x));render();}
+function cycleSort(){sort=sort==='recent'?'title':sort==='title'?'author':'recent';document.querySelector('.sort').textContent={recent:'Ultimi aggiunti ▾',title:'Titolo A → Z ▾',author:'Autore A → Z ▾'}[sort];render();}
 function render(){
-  const q=(document.getElementById("q")?.value||"").toLowerCase().trim();
+  const q=(document.getElementById('q')?.value||'').toLowerCase().trim();
   let arr=books.filter(b=>{
-    const okFilter =
-      filter==="all" ||
-      (filter==="personal" && b.cat==="Personale") ||
-      (filter==="work" && b.cat==="Studio / Lavoro") ||
-      (filter==="paper" && b.fmt==="Cartaceo") ||
-      (filter==="ebook" && b.fmt==="Ebook");
-    const text=[b.t,b.a,b.isbn||"",b.pub||"",b.s,b.ss,b.cat,b.fmt].join(" ").toLowerCase();
-    return okFilter && (!q || text.includes(q));
+    const ok=filter==='all'||(filter==='personal'&&b.cat==='Personale')||(filter==='work'&&b.cat==='Studio / Lavoro')||(filter==='paper'&&b.fmt==='Cartaceo')||(filter==='ebook'&&b.fmt==='Ebook');
+    const text=[b.t,b.a,b.isbn||'',b.pub||'',b.s,b.ss,b.cat,b.fmt].join(' ').toLowerCase();
+    return ok&&(!q||text.includes(q));
   });
-
-  if(sort==="recent") arr.sort((a,b)=>b.n-a.n);
-  if(sort==="title") arr.sort((a,b)=>a.t.localeCompare(b.t,"it"));
-  if(sort==="author") arr.sort((a,b)=>a.a.localeCompare(b.a,"it"));
-
-  document.getElementById("count").textContent =
-    books.length+" libri · "+books.filter(b=>b.fmt==="Ebook").length+" ebook";
-
-  document.getElementById("grid").innerHTML = arr.length
-    ? arr.map(b=>`<button class="book" onclick="showBook(${books.indexOf(b)})">
-        <img class="cover" src="${b.img}" alt="" onerror="this.style.opacity='.25'">
-        <div class="booktitle">${b.t}</div>
-        <div class="author">${b.a}</div>
-      </button>`).join("")
-    : `<div class="empty">Nessun libro trovato.<br><br>Prova un altro termine o cambia filtro.</div>`;
+  if(sort==='recent')arr.sort((a,b)=>(b.n||0)-(a.n||0));
+  if(sort==='title')arr.sort((a,b)=>a.t.localeCompare(b.t,'it'));
+  if(sort==='author')arr.sort((a,b)=>a.a.localeCompare(b.a,'it'));
+  document.getElementById('count').textContent=books.length+' libri · '+books.filter(b=>b.fmt==='Ebook').length+' ebook';
+  document.getElementById('grid').innerHTML=arr.length?arr.map(b=>`<button class="book" onclick="showBook(${books.indexOf(b)})"><img class="cover" src="${b.img||''}" alt="" onerror="this.style.opacity='.18'"><div class="booktitle">${escapeHtml(b.t)}</div><div class="author">${escapeHtml(b.a)}</div></button>`).join(''):`<div class="empty">Nessun libro trovato.<br><br>Prova un altro termine o cambia filtro.</div>`;
 }
+function escapeHtml(s){return String(s||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+function openSheet(content){document.getElementById('overlay').style.display='flex';document.getElementById('sheet').innerHTML=content;}
+function closeSheet(){stopScanner();document.getElementById('overlay').style.display='none';}
 
+aSyncNoop = null;
 function openAdd(){
-  openSheet(`
-    <button class="close" onclick="closeSheet()">×</button>
-    <h2>Aggiungi libro</h2>
-    <p>Lascia che sia l'app a fare il lavoro.</p>
-    <button class="action primary" onclick="scan()">📷 &nbsp; Scansiona ISBN</button>
-    <button class="action" onclick="manual()">＋ &nbsp; Inserisci manualmente</button>
-    <p class="small">Nella versione reale, la scansione recupererà automaticamente copertina, titolo, autore, editore, anno e classificazione.</p>
-  `);
+  openSheet(`<button class="close" onclick="closeSheet()">×</button><h2>Aggiungi libro</h2><p>Lascia che sia l'app a fare il lavoro.</p><button class="action primary" onclick="startScanner()">📷 &nbsp; Scansiona ISBN</button><button class="action" onclick="manualIsbn()">⌨️ &nbsp; Inserisci ISBN</button><button class="action" onclick="manual()">＋ &nbsp; Inserisci manualmente</button><p class="small">La scansione usa la fotocamera del tuo iPhone. Al primo utilizzo Safari chiederà il permesso.</p>`);
 }
-
-function scan(){
-  openSheet(`
-    <button class="close" onclick="closeSheet()">×</button>
-    <h2>Scansione ISBN</h2>
-    <p>Inquadra il codice a barre sul retro del libro.</p>
-    <div style="height:190px;border:2px dashed #24554b;border-radius:20px;display:grid;place-items:center;font-size:50px;color:#24554b">▥</div>
-    <div class="progress"><div class="dot on"></div><div class="dot"></div><div class="dot"></div></div>
-    <div class="small">Scansione → Dati libro → Conferma</div>
-    <button class="action primary" onclick="simulate()">Simula scansione reale</button>
-  `);
+function startScanner(){
+  openSheet(`<button class="close" onclick="closeSheet()">×</button><h2>Scansiona ISBN</h2><p>Consenti l'accesso alla fotocamera e inquadra il codice a barre.</p><div style="position:relative;overflow:hidden;border-radius:20px;background:#18231f;min-height:230px"><video id="scannerVideo" autoplay muted playsinline style="width:100%;height:230px;object-fit:cover"></video><div style="position:absolute;left:10%;right:10%;top:50%;height:2px;background:#fff;box-shadow:0 0 10px rgba(255,255,255,.7)"></div></div><div class="progress"><div class="dot on"></div><div class="dot"></div><div class="dot"></div></div><div id="scanStatus" class="small">In attesa della fotocamera…</div><button class="action" onclick="manualIsbn()">Inserisci ISBN a mano</button>`);
+  const video=document.getElementById('scannerVideo');
+  if(!video){return;}
+  if(!window.ZXingBrowser){
+    document.getElementById('scanStatus').textContent='Lettore barcode non disponibile. Puoi inserire l’ISBN a mano.'; return;
+  }
+  try{
+    const reader=new ZXingBrowser.BrowserMultiFormatReader();
+    scannerControls=reader.decodeFromConstraints({video:{facingMode:{ideal:'environment'}},audio:false},video,(result,err)=>{
+      if(result){ const raw=result.getText(); const isbn=normalizeISBN(raw); if(isbn){ stopScanner(); lookupISBN(isbn); } }
+    });
+    Promise.resolve(scannerControls).catch(()=>{});
+    document.getElementById('scanStatus').textContent='Fotocamera attiva · inquadra il codice ISBN';
+  }catch(e){
+    document.getElementById('scanStatus').textContent='Impossibile avviare la fotocamera. Usa “Inserisci ISBN a mano”.';
+  }
 }
-
-function simulate(){
-  openSheet(`
-    <button class="close" onclick="closeSheet()">×</button>
-    <h2>Recupero informazioni</h2>
-    <div class="progress"><div class="dot on"></div><div class="dot on"></div><div class="dot on"></div></div>
-    <div class="status">Tutto pronto ✓</div>
-    <div class="meta">
-      <div><span>Titolo</span><b>La diva Julia</b></div>
-      <div><span>Autore</span><b>W. Somerset Maugham</b></div>
-      <div><span>Editore</span><b>Adelphi</b></div>
-      <div><span>Anno</span><b>2005</b></div>
-      <div><span>Formato</span><b>Cartaceo</b></div>
-      <div><span>Settore</span><b>Narrativa</b></div>
-      <div><span>Sottosettore</span><b>Letteratura inglese</b></div>
-      <div><span>ISBN</span><b>9788845919978</b></div>
-    </div>
-    <button class="action primary" onclick="closeSheet()">Aggiungi alla biblioteca</button>
-  `);
+function stopScanner(){
+  try{ if(scannerControls&&typeof scannerControls.stop==='function')scannerControls.stop(); }catch(e){}
+  scannerControls=null;
+  const v=document.getElementById('scannerVideo');
+  if(v&&v.srcObject){v.srcObject.getTracks().forEach(t=>t.stop());v.srcObject=null;}
 }
-
+function manualIsbn(){
+  stopScanner();
+  openSheet(`<button class="close" onclick="closeSheet()">×</button><h2>Inserisci ISBN</h2><p>Puoi digitare le 10 o 13 cifre.</p><input id="isbnInput" inputmode="numeric" placeholder="9788845919978" style="width:100%;padding:14px;border-radius:15px;border:1px solid var(--line);background:rgba(255,255,255,.6);outline:0"><button class="action primary" onclick="doManualIsbn()">Cerca libro</button><div id="isbnError" class="small"></div>`);
+}
+function doManualIsbn(){const isbn=normalizeISBN(document.getElementById('isbnInput').value);if(!isbn){document.getElementById('isbnError').textContent='ISBN non valido.';return;}lookupISBN(isbn);}
+function normalizeISBN(raw){
+  let s=String(raw||'').replace(/[^0-9Xx]/g,'').toUpperCase();
+  if(s.length===13&&s.startsWith('978')) return s;
+  if(s.length===10){
+    const body=s.slice(0,9);let sum=0;for(let i=0;i<9;i++)sum+=(10-i)*Number(body[i]);let check=(11-(sum%11))%11;let c=check===10?'X':String(check);if(c===s[9]){let x='978'+body;let total=0;for(let i=0;i<12;i++)total+=Number(x[i])*(i%2?3:1);return x+(10-(total%10))%10;}}
+  return null;
+}
+async function lookupISBN(isbn){
+  openSheet(`<button class="close" onclick="closeSheet()">×</button><h2>Recupero informazioni</h2><div class="progress"><div class="dot on"></div><div class="dot on"></div><div class="dot"></div></div><div class="status">Cerco il libro…</div><div class="small">ISBN ${isbn}</div>`);
+  try{
+    let data=null;
+    const r=await fetch('https://openlibrary.org/api/books?bibkeys=ISBN:'+isbn+'&jscmd=data&format=json');
+    if(r.ok){const all=await r.json();data=all['ISBN:'+isbn]||null;}
+    if(!data){
+      const r2=await fetch('https://www.googleapis.com/books/v1/volumes?q=isbn:'+isbn);
+      if(r2.ok){const g=await r2.json();if(g.items&&g.items[0])data=googleToBook(g.items[0].volumeInfo,isbn);}
+    }
+    if(!data)throw new Error('not found');
+    const b=normalizeBook(data,isbn);showFoundBook(b);
+  }catch(e){
+    openSheet(`<button class="close" onclick="closeSheet()">×</button><h2>ISBN non trovato</h2><p>Non ho trovato dati bibliografici online per <b>${isbn}</b>.</p><button class="action primary" onclick="manualIsbn()">Prova un altro ISBN</button><button class="action" onclick="manual()">Inserisci il libro manualmente</button>`);
+  }
+}
+function googleToBook(v,isbn){return {title:v.title,authors:v.authors||[],publishers:v.publisher?[v.publisher]:[],publish_date:v.publishedDate,number_of_pages:v.pageCount,cover:{medium:v.imageLinks?.thumbnail},subjects:v.categories||[],isbn:isbn};}
+function normalizeBook(d,isbn){
+  const title=d.title||d.name||'Titolo non disponibile';
+  const authors=(d.authors||[]).map(x=>typeof x==='string'?x:(x.name||'')).filter(Boolean);
+  const subjects=(d.subjects||d.categories||[]).map(x=>typeof x==='string'?x:(x.name||x.title||'')).filter(Boolean);
+  let img=d.cover?.medium||d.cover?.large||d.cover?.small||`https://covers.openlibrary.org/b/isbn/${isbn}-M.jpg`; img=String(img).replace(/^http:/,'https:');
+  const cls=classify(title,subjects);
+  return {t:title,a:authors.join(', ')||'Autore non disponibile',cat:'Personale',fmt:'Cartaceo',s:cls.s,ss:cls.ss,img,n:Date.now(),isbn,pub:(d.publishers&&d.publishers[0])||'',year:String(d.publish_date||'').slice(0,4),pages:d.number_of_pages||''};
+}
+function classify(title,subjects){
+  const text=(title+' '+subjects.join(' ')).toLowerCase();
+  if(/diritto|codice civile|civile|penale|amministrativo|costituzionale/.test(text))return{s:'Diritto',ss:/penale/.test(text)?'Penale':'Civile'};
+  if(/astronom|fisica|matematic|scienza|science/.test(text))return{s:'Scienze',ss:/astronom/.test(text)?'Astronomia':'Scienze'};
+  if(/storia|history|medioevo|romano|antichità/.test(text))return{s:'Storia',ss:'Storia generale'};
+  if(/fantascienza|science fiction|sci-fi|dystop|distopia|space opera/.test(text))return{s:'Narrativa',ss:'Fantascienza'};
+  if(/giallo|mistero|thriller|detective/.test(text))return{s:'Narrativa',ss:'Giallo / Thriller'};
+  return{s:'Narrativa',ss:'Da verificare'};
+}
+function showFoundBook(b){
+  openSheet(`<button class="close" onclick="closeSheet()">×</button><h2>Libro trovato ✓</h2><p>${escapeHtml(b.a)}</p><div class="meta"><div><span>Titolo</span><b>${escapeHtml(b.t)}</b></div><div><span>Autore</span><b>${escapeHtml(b.a)}</b></div><div><span>Editore</span><b>${escapeHtml(b.pub||'—')}</b></div><div><span>Anno</span><b>${escapeHtml(b.year||'—')}</b></div><div><span>Settore</span><b>${escapeHtml(b.s)}</b></div><div><span>Sottosettore</span><b>${escapeHtml(b.ss)}</b></div><div><span>ISBN</span><b>${b.isbn}</b></div></div><button class="action primary" onclick='addBook(${JSON.stringify(b).replace(/'/g,"&#39;")})'>＋ Aggiungi alla biblioteca</button><p class="small">La classificazione è una proposta automatica e potrà essere modificata.</p>`);
+}
+function addBook(b){
+  const exists=books.find(x=>x.isbn===b.isbn);
+  if(exists){showBook(books.indexOf(exists));return;}
+  books.push(b);saveBooks();render();closeSheet();
+}
 function manual(){
-  openSheet(`
-    <button class="close" onclick="closeSheet()">×</button>
-    <h2>Inserimento manuale</h2>
-    <p>Utile soprattutto per ebook o libri senza ISBN.</p>
-    <div class="meta">
-      <div><span>Titolo</span><b>—</b></div>
-      <div><span>Autore</span><b>—</b></div>
-      <div><span>Formato</span><b>Ebook</b></div>
-    </div>
-    <button class="action primary" onclick="closeSheet()">Salva libro</button>
-  `);
+  openSheet(`<button class="close" onclick="closeSheet()">×</button><h2>Inserimento manuale</h2><p>Per ebook o libri senza ISBN.</p><input id="mt" placeholder="Titolo" style="width:100%;padding:13px;margin:4px 0;border-radius:13px;border:1px solid var(--line);background:rgba(255,255,255,.6)"><input id="ma" placeholder="Autore" style="width:100%;padding:13px;margin:4px 0;border-radius:13px;border:1px solid var(--line);background:rgba(255,255,255,.6)"><button class="action primary" onclick="saveManual()">Salva libro</button>`);
 }
-
+function saveManual(){const t=document.getElementById('mt').value.trim(),a=document.getElementById('ma').value.trim();if(!t)return;books.push({t,a:a||'—',cat:'Personale',fmt:'Ebook',s:'Da classificare',ss:'Da verificare',img:'',n:Date.now()});saveBooks();render();closeSheet();}
 function showBook(i){
   const b=books[i];
-  openSheet(`
-    <button class="close" onclick="closeSheet()">×</button>
-    <h2>${b.t}</h2>
-    <p>${b.a}</p>
-    <div class="meta">
-      <div><span>Formato</span><b>${b.fmt}</b></div>
-      <div><span>Tipo</span><b>${b.cat}</b></div>
-      <div><span>Settore</span><b>${b.s}</b></div>
-      <div><span>Sottosettore</span><b>${b.ss}</b></div>
-      <div><span>Editore</span><b>${b.pub||"—"}</b></div>
-      <div><span>Anno</span><b>${b.year||"—"}</b></div>
-      <div><span>Pagine</span><b>${b.pages||"—"}</b></div>
-      <div><span>ISBN</span><b>${b.isbn||"—"}</b></div>
-    </div>
-    <button class="action" onclick="closeSheet()">Modifica</button>
-  `);
+  openSheet(`<button class="close" onclick="closeSheet()">×</button><h2>${escapeHtml(b.t)}</h2><p>${escapeHtml(b.a)}</p><div class="meta"><div><span>Formato</span><b>${escapeHtml(b.fmt)}</b></div><div><span>Tipo</span><b>${escapeHtml(b.cat)}</b></div><div><span>Settore</span><b>${escapeHtml(b.s)}</b></div><div><span>Sottosettore</span><b>${escapeHtml(b.ss)}</b></div><div><span>Editore</span><b>${escapeHtml(b.pub||'—')}</b></div><div><span>Anno</span><b>${escapeHtml(b.year||'—')}</b></div><div><span>Pagine</span><b>${escapeHtml(b.pages||'—')}</b></div><div><span>ISBN</span><b>${escapeHtml(b.isbn||'—')}</b></div></div><button class="action" onclick="closeSheet()">Modifica</button>`);
 }
-
-function openSheet(content){
-  document.getElementById("overlay").style.display="flex";
-  document.getElementById("sheet").innerHTML=content;
-}
-function closeSheet(){document.getElementById("overlay").style.display="none"}
-
-document.getElementById("overlay").addEventListener("click",e=>{
-  if(e.target.id==="overlay") closeSheet();
-});
-
+document.getElementById('overlay').addEventListener('click',e=>{if(e.target.id==='overlay')closeSheet();});
 render();
 </script>
 </body>
